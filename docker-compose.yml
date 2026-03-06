@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  postgres:
+    image: postgres:15-alpine
+    container_name: petvoyage-postgres
+    environment:
+      POSTGRES_USER: petvoyage
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: petvoyage
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U petvoyage"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB
+  mongodb:
+    image: mongo:6.0
+    container_name: petvoyage-mongodb
+    environment:
+      MONGO_INITDB_DATABASE: petvoyage
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/petvoyage --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: petvoyage-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # API 服务
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: petvoyage-api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://petvoyage:password@postgres:5432/petvoyage
+      - MONGODB_URL=mongodb://mongodb:27017/petvoyage
+      - REDIS_URL=redis://redis:6379/0
+      - SECRET_KEY=change-me-in-production
+      - ENV=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  # Celery Worker (可选，用于异步任务)
+  # celery_worker:
+  #   build:
+  #     context: ./backend
+  #   container_name: petvoyage-celery
+  #   command: celery -A app.tasks worker --loglevel=info
+  #   environment:
+  #     - DATABASE_URL=postgresql://petvoyage:password@postgres:5432/petvoyage
+  #     - REDIS_URL=redis://redis:6379/0
+  #   depends_on:
+  #     - redis
+  #     - postgres
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  redis_data:
+
+networks:
+  default:
+    name: petvoyage-network
